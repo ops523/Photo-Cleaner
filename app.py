@@ -17,34 +17,51 @@ HF_HEADERS = {"Authorization": f"Bearer {st.secrets['HF_TOKEN']}"}
 # ---------------------------
 # Hugging Face Call
 # ---------------------------
-def call_huggingface(image_bytes, mask_bytes):
-    for _ in range(3):
+time.sleep(2)
+def call_huggingface(image, mask):
+
+    # 🔥 Resize (CRITICAL for HF stability)
+    image = image.resize((768, 512))
+    mask = mask.resize((768, 512))
+
+    img_bytes = io.BytesIO()
+    image.save(img_bytes, format="PNG")
+
+    mask_bytes = io.BytesIO()
+    mask.save(mask_bytes, format="PNG")
+
+    for attempt in range(5):  # more retries
         try:
             response = requests.post(
                 HF_API_URL,
                 headers=HF_HEADERS,
                 files={
-                    "image": ("image.png", image_bytes, "image/png"),
-                    "mask": ("mask.png", mask_bytes, "image/png"),
+                    "image": ("image.png", img_bytes.getvalue(), "image/png"),
+                    "mask": ("mask.png", mask_bytes.getvalue(), "image/png"),
                 },
                 data={
-                    "prompt": "clean empty wall, natural background, no vehicles, no people, realistic texture"
+                    "prompt": "clean empty wall, realistic urban background, no vehicles, no people, natural texture, no blur"
                 },
-                timeout=90
+                timeout=120
             )
 
+            # Model loading
             if response.status_code == 503:
-                time.sleep(5)
+                st.warning(f"⏳ Model loading... retry {attempt+1}")
+                time.sleep(6)
                 continue
 
             if response.status_code == 200:
                 return Image.open(io.BytesIO(response.content))
 
-        except:
-            time.sleep(3)
+            else:
+                st.error(f"HF Error: {response.status_code}")
+                return None
+
+        except Exception as e:
+            time.sleep(4)
 
     return None
-
 # ---------------------------
 # Upload
 # ---------------------------
@@ -108,10 +125,7 @@ if uploaded_file:
             mask_bytes = io.BytesIO()
             mask_pil.save(mask_bytes, format="PNG")
 
-            result_image = call_huggingface(
-                img_bytes.getvalue(),
-                mask_bytes.getvalue()
-            )
+            result_image = call_huggingface(image, mask_pil)
 
             if result_image is None:
                 st.error("❌ Hugging Face failed. Try again.")
