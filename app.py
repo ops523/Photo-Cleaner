@@ -6,12 +6,14 @@ from ultralytics import YOLO
 import io
 import requests
 import replicate
+import tempfile
+import os
 
 st.set_page_config(layout="wide")
 st.title("🧱 Wall Image Cleaner (Free-First AI - Production)")
 
 # ---------------------------
-# Load YOLO
+# Load YOLO Model
 # ---------------------------
 @st.cache_resource
 def load_model():
@@ -50,32 +52,48 @@ def call_huggingface(image_bytes, mask_bytes):
         else:
             return None
 
-    except Exception as e:
+    except:
         return None
 
 # ---------------------------
-# Replicate (FALLBACK - FIXED)
+# Replicate (STABLE VERSION)
 # ---------------------------
 def call_replicate(image_bytes, mask_bytes):
+    try:
+        # Save temp files
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as img_file:
+            img_file.write(image_bytes)
+            img_path = img_file.name
 
-    image_file = io.BytesIO(image_bytes)
-    mask_file = io.BytesIO(mask_bytes)
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as mask_file:
+            mask_file.write(mask_bytes)
+            mask_path = mask_file.name
 
-    output = replicate_client.run(
-        "stability-ai/stable-diffusion-inpainting",
-        input={
-            "image": image_file,
-            "mask": mask_file,
-            "prompt": "clean empty wall, natural background, no vehicles, no people, realistic texture",
-            "num_inference_steps": 30,
-            "guidance_scale": 7.5
-        }
-    )
+        # Call Replicate
+        output = replicate_client.run(
+            "stability-ai/stable-diffusion-inpainting",
+            input={
+                "image": open(img_path, "rb"),
+                "mask": open(mask_path, "rb"),
+                "prompt": "clean empty wall, natural background, no vehicles, no people, realistic texture",
+                "num_inference_steps": 30,
+                "guidance_scale": 7.5
+            }
+        )
 
-    img_url = output[0]
-    response = requests.get(img_url)
+        img_url = output[0]
+        response = requests.get(img_url)
+        result_image = Image.open(io.BytesIO(response.content))
 
-    return Image.open(io.BytesIO(response.content))
+        # Cleanup temp files
+        os.remove(img_path)
+        os.remove(mask_path)
+
+        return result_image
+
+    except Exception as e:
+        st.error(f"Replicate Error: {e}")
+        return None
 
 # ---------------------------
 # Upload Image
@@ -97,6 +115,7 @@ if uploaded_file:
         x2 = st.number_input("x2", 0, w, w)
         y2 = st.number_input("y2", 0, h, h)
 
+    # Preview
     preview = img_np.copy()
     cv2.rectangle(preview, (x1, y1), (x2, y2), (0,255,0), 2)
     st.image(preview, caption="Flex Protected", width="stretch")
@@ -119,13 +138,14 @@ if uploaded_file:
                     if label in ["person", "car", "motorcycle", "truck", "bus"]:
                         x_min, y_min, x_max, y_max = map(int, box.xyxy[0])
 
+                        # Padding for better removal
                         pad = 20
                         x_min = max(0, x_min - pad)
                         y_min = max(0, y_min - pad)
                         x_max = min(w, x_max + pad)
                         y_max = min(h, y_max + pad)
 
-                        # Protect flex
+                        # Protect flex region
                         if not (x_min > x1 and y_min > y1 and x_max < x2 and y_max < y2):
                             mask[y_min:y_max, x_min:x_max] = 255
 
@@ -144,15 +164,25 @@ if uploaded_file:
             mask_bytes.seek(0)
 
             # ---------------------------
-            # TRY FREE FIRST
+            # Try FREE API First
             # ---------------------------
-            result_image = call_huggingface(img_bytes.getvalue(), mask_bytes.getvalue())
+            result_image = call_huggingface(
+                img_bytes.getvalue(),
+                mask_bytes.getvalue()
+            )
 
             if result_image:
                 st.success("✅ Processed using FREE Hugging Face")
             else:
                 st.warning("⚠️ Free API failed → Switching to Replicate")
-                result_image = call_replicate(img_bytes.getvalue(), mask_bytes.getvalue())
+                result_image = call_replicate(
+                    img_bytes.getvalue(),
+                    mask_bytes.getvalue()
+                )
+
+            if result_image is None:
+                st.error("❌ Processing failed on both APIs")
+                st.stop()
 
             result_np = np.array(result_image)
 
@@ -172,7 +202,7 @@ if uploaded_file:
             warped = cv2.warpPerspective(result_np, matrix, (w, h))
 
             # ---------------------------
-            # Display
+            # Display Results
             # ---------------------------
             st.subheader("Results")
 
