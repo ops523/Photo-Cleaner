@@ -4,4 +4,3 @@ pillow
 numpy
 ultralytics
 requests
-replicate
