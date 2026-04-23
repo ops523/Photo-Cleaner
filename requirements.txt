@@ -1,5 +1,6 @@
 streamlit
+diffusers
+transformers
+accelerate
+torch
 opencv-python-headless
-pillow
-numpy
-ultralytics
