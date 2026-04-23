@@ -1,22 +1,12 @@
 import streamlit as st
 import numpy as np
 from PIL import Image, ImageDraw
-from ultralytics import YOLO
 import io
 import requests
 import time
 
 st.set_page_config(layout="wide")
-st.title("🧱 Wall Image Cleaner (HF Only - No OpenCV)")
-
-# ---------------------------
-# Load YOLO
-# ---------------------------
-@st.cache_resource
-def load_model():
-    return YOLO("yolov8n.pt")
-
-model = load_model()
+st.title("🧱 Wall Image Cleaner (Stable MVP - No CV2)")
 
 # ---------------------------
 # Hugging Face Config
@@ -62,49 +52,52 @@ uploaded_file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    img_np = np.array(image)
-    h, w, _ = img_np.shape
+    w, h = image.size
 
-    st.subheader("Select Flex Area (Protected Region)")
+    st.subheader("Step 1: Select FLEX (Protected Area)")
 
     col1, col2 = st.columns(2)
     with col1:
-        x1 = st.number_input("x1", 0, w, 0)
-        y1 = st.number_input("y1", 0, h, 0)
+        fx1 = st.number_input("Flex x1", 0, w, 0)
+        fy1 = st.number_input("Flex y1", 0, h, 0)
     with col2:
-        x2 = st.number_input("x2", 0, w, w)
-        y2 = st.number_input("y2", 0, h, h)
+        fx2 = st.number_input("Flex x2", 0, w, w)
+        fy2 = st.number_input("Flex y2", 0, h, h)
 
-    # Preview using PIL
+    st.subheader("Step 2: Select REMOVE Area (Object Region)")
+
+    col3, col4 = st.columns(2)
+    with col3:
+        rx1 = st.number_input("Remove x1", 0, w, 0)
+        ry1 = st.number_input("Remove y1", 0, h, 0)
+    with col4:
+        rx2 = st.number_input("Remove x2", 0, w, w)
+        ry2 = st.number_input("Remove y2", 0, h, h)
+
+    # Preview
     preview = image.copy()
     draw = ImageDraw.Draw(preview)
-    draw.rectangle([x1, y1, x2, y2], outline="green", width=3)
 
-    st.image(preview, caption="Flex Protected", width="stretch")
+    # Green = flex
+    draw.rectangle([fx1, fy1, fx2, fy2], outline="green", width=3)
+
+    # Red = removal
+    draw.rectangle([rx1, ry1, rx2, ry2], outline="red", width=3)
+
+    st.image(preview, caption="Green = Protected | Red = Remove", width="stretch")
 
     if st.button("🚀 Process Image"):
 
-        with st.spinner("Processing with Hugging Face..."):
+        with st.spinner("Processing..."):
 
-            results = model(img_np)
+            # Create mask
             mask = np.zeros((h, w), dtype=np.uint8)
 
-            for r in results:
-                for box in r.boxes:
-                    cls = int(box.cls[0])
-                    label = model.names[cls]
-
-                    if label in ["person", "car", "motorcycle", "truck", "bus"]:
-                        x_min, y_min, x_max, y_max = map(int, box.xyxy[0])
-
-                        pad = 20
-                        x_min = max(0, x_min - pad)
-                        y_min = max(0, y_min - pad)
-                        x_max = min(w, x_max + pad)
-                        y_max = min(h, y_max + pad)
-
-                        if not (x_min > x1 and y_min > y1 and x_max < x2 and y_max < y2):
-                            mask[y_min:y_max, x_min:x_max] = 255
+            # Only remove region (exclude flex overlap)
+            for y in range(ry1, ry2):
+                for x in range(rx1, rx2):
+                    if not (fx1 <= x <= fx2 and fy1 <= y <= fy2):
+                        mask[y, x] = 255
 
             mask_pil = Image.fromarray(mask)
 
