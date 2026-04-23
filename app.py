@@ -5,15 +5,13 @@ from PIL import Image
 from ultralytics import YOLO
 import io
 import requests
-import replicate
-import tempfile
-import os
+import time
 
 st.set_page_config(layout="wide")
-st.title("🧱 Wall Image Cleaner (Free-First AI - Production)")
+st.title("🧱 Wall Image Cleaner (Hugging Face Only)")
 
 # ---------------------------
-# Load YOLO Model
+# Load YOLO
 # ---------------------------
 @st.cache_resource
 def load_model():
@@ -22,81 +20,51 @@ def load_model():
 model = load_model()
 
 # ---------------------------
-# API CONFIG
+# Hugging Face Config
 # ---------------------------
 HF_API_URL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-inpainting"
 HF_HEADERS = {"Authorization": f"Bearer {st.secrets['HF_TOKEN']}"}
 
-replicate_client = replicate.Client(api_token=st.secrets["REPLICATE_API_TOKEN"])
-
 # ---------------------------
-# Hugging Face (FREE)
+# Hugging Face Call (Retry Logic Added)
 # ---------------------------
 def call_huggingface(image_bytes, mask_bytes):
-    try:
-        response = requests.post(
-            HF_API_URL,
-            headers=HF_HEADERS,
-            files={
-                "image": image_bytes,
-                "mask": mask_bytes
-            },
-            data={
-                "prompt": "clean empty wall, natural background, no vehicles, no people, realistic texture"
-            },
-            timeout=60
-        )
 
-        if response.status_code == 200:
-            return Image.open(io.BytesIO(response.content))
-        else:
-            return None
+    for attempt in range(3):  # retry up to 3 times
+        try:
+            response = requests.post(
+                HF_API_URL,
+                headers=HF_HEADERS,
+                files={
+                    "image": ("image.png", image_bytes, "image/png"),
+                    "mask": ("mask.png", mask_bytes, "image/png"),
+                },
+                data={
+                    "prompt": "clean empty wall, natural background, no vehicles, no people, realistic texture",
+                },
+                timeout=90
+            )
 
-    except:
-        return None
+            # Model loading (common HF issue)
+            if response.status_code == 503:
+                time.sleep(5)
+                continue
 
-# ---------------------------
-# Replicate (STABLE VERSION)
-# ---------------------------
-def call_replicate(image_bytes, mask_bytes):
-    try:
-        # Save temp files
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as img_file:
-            img_file.write(image_bytes)
-            img_path = img_file.name
+            if response.status_code == 200:
+                return Image.open(io.BytesIO(response.content))
 
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as mask_file:
-            mask_file.write(mask_bytes)
-            mask_path = mask_file.name
+            else:
+                st.warning(f"HF Error: {response.status_code}")
+                return None
 
-        # Call Replicate
-        output = replicate_client.run(
-            "stability-ai/stable-diffusion-inpainting",
-            input={
-                "image": open(img_path, "rb"),
-                "mask": open(mask_path, "rb"),
-                "prompt": "clean empty wall, natural background, no vehicles, no people, realistic texture",
-                "num_inference_steps": 30,
-                "guidance_scale": 7.5
-            }
-        )
+        except Exception as e:
+            time.sleep(3)
 
-        img_url = output[0]
-        response = requests.get(img_url)
-        result_image = Image.open(io.BytesIO(response.content))
+    return None
 
-        # Cleanup temp files
-        os.remove(img_path)
-        os.remove(mask_path)
-
-        return result_image
-
-    except Exception as e:
-        st.error(f"Replicate Error: {e}")
-        return None
 
 # ---------------------------
-# Upload Image
+# Upload
 # ---------------------------
 uploaded_file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
 
@@ -122,7 +90,7 @@ if uploaded_file:
 
     if st.button("🚀 Process Image"):
 
-        with st.spinner("Processing..."):
+        with st.spinner("Processing with Hugging Face..."):
 
             # ---------------------------
             # Object Detection
@@ -138,14 +106,12 @@ if uploaded_file:
                     if label in ["person", "car", "motorcycle", "truck", "bus"]:
                         x_min, y_min, x_max, y_max = map(int, box.xyxy[0])
 
-                        # Padding for better removal
                         pad = 20
                         x_min = max(0, x_min - pad)
                         y_min = max(0, y_min - pad)
                         x_max = min(w, x_max + pad)
                         y_max = min(h, y_max + pad)
 
-                        # Protect flex region
                         if not (x_min > x1 and y_min > y1 and x_max < x2 and y_max < y2):
                             mask[y_min:y_max, x_min:x_max] = 255
 
@@ -160,28 +126,16 @@ if uploaded_file:
             mask_bytes = io.BytesIO()
             mask_pil.save(mask_bytes, format="PNG")
 
-            img_bytes.seek(0)
-            mask_bytes.seek(0)
+            img_bytes = img_bytes.getvalue()
+            mask_bytes = mask_bytes.getvalue()
 
             # ---------------------------
-            # Try FREE API First
+            # Call Hugging Face
             # ---------------------------
-            result_image = call_huggingface(
-                img_bytes.getvalue(),
-                mask_bytes.getvalue()
-            )
-
-            if result_image:
-                st.success("✅ Processed using FREE Hugging Face")
-            else:
-                st.warning("⚠️ Free API failed → Switching to Replicate")
-                result_image = call_replicate(
-                    img_bytes.getvalue(),
-                    mask_bytes.getvalue()
-                )
+            result_image = call_huggingface(img_bytes, mask_bytes)
 
             if result_image is None:
-                st.error("❌ Processing failed on both APIs")
+                st.error("❌ Hugging Face failed. Try again or adjust mask.")
                 st.stop()
 
             result_np = np.array(result_image)
@@ -202,7 +156,7 @@ if uploaded_file:
             warped = cv2.warpPerspective(result_np, matrix, (w, h))
 
             # ---------------------------
-            # Display Results
+            # Display
             # ---------------------------
             st.subheader("Results")
 
