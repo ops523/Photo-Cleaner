@@ -4,28 +4,70 @@ import numpy as np
 from PIL import Image
 from ultralytics import YOLO
 import io
-import torch
-from diffusers import StableDiffusionInpaintPipeline
+import requests
+import replicate
 
 st.set_page_config(layout="wide")
-st.title("🧱 Wall Image Cleaner V2 (AI Powered)")
+st.title("🧱 Wall Image Cleaner (Free-First AI)")
 
 # Load YOLO
 @st.cache_resource
-def load_yolo():
+def load_model():
     return YOLO("yolov8n.pt")
 
-# Load Inpainting Model
-@st.cache_resource
-def load_inpaint_model():
-    return StableDiffusionInpaintPipeline.from_pretrained(
-        "runwayml/stable-diffusion-inpainting",
-        torch_dtype=torch.float16
-    ).to("cuda")
+model = load_model()
 
-yolo = load_yolo()
-pipe = load_inpaint_model()
+HF_API_URL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-inpainting"
+HF_HEADERS = {"Authorization": f"Bearer {st.secrets['HF_TOKEN']}"}
 
+replicate_client = replicate.Client(api_token=st.secrets["REPLICATE_API_TOKEN"])
+
+# ---------------------------
+# Hugging Face Call (FREE)
+# ---------------------------
+def call_huggingface(image_bytes, mask_bytes):
+    try:
+        response = requests.post(
+            HF_API_URL,
+            headers=HF_HEADERS,
+            files={
+                "image": image_bytes,
+                "mask": mask_bytes
+            },
+            data={
+                "prompt": "clean empty wall, natural background, no vehicles, no people, realistic texture"
+            },
+            timeout=60
+        )
+
+        if response.status_code == 200:
+            return Image.open(io.BytesIO(response.content))
+        else:
+            return None
+
+    except:
+        return None
+
+
+# ---------------------------
+# Replicate Fallback (PAID)
+# ---------------------------
+def call_replicate(image_bytes, mask_bytes):
+    output = replicate_client.run(
+        "stability-ai/stable-diffusion-inpainting",
+        input={
+            "image": image_bytes,
+            "mask": mask_bytes,
+            "prompt": "clean empty wall, natural background, no vehicles, no people"
+        }
+    )
+    img_url = output[0]
+    return Image.open(io.BytesIO(requests.get(img_url).content))
+
+
+# ---------------------------
+# Upload
+# ---------------------------
 uploaded_file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
 
 if uploaded_file:
@@ -49,15 +91,15 @@ if uploaded_file:
 
     if st.button("🚀 Process"):
 
-        with st.spinner("AI Processing..."):
+        with st.spinner("Processing..."):
 
-            results = yolo(img_np)
+            results = model(img_np)
             mask = np.zeros((h, w), dtype=np.uint8)
 
             for r in results:
                 for box in r.boxes:
                     cls = int(box.cls[0])
-                    label = yolo.names[cls]
+                    label = model.names[cls]
 
                     if label in ["person", "car", "motorcycle", "truck", "bus"]:
                         x_min, y_min, x_max, y_max = map(int, box.xyxy[0])
@@ -71,24 +113,34 @@ if uploaded_file:
                         if not (x_min > x1 and y_min > y1 and x_max < x2 and y_max < y2):
                             mask[y_min:y_max, x_min:x_max] = 255
 
-            # Convert to PIL
-            mask_pil = Image.fromarray(mask).convert("RGB")
+            mask_pil = Image.fromarray(mask)
 
-            # AI Inpainting
-            result = pipe(
-                prompt="clean wall, natural background, no vehicles, no people",
-                image=image,
-                mask_image=mask_pil
-            ).images[0]
+            # Convert to bytes
+            img_bytes = io.BytesIO()
+            image.save(img_bytes, format="PNG")
 
-            result_np = np.array(result)
+            mask_bytes = io.BytesIO()
+            mask_pil.save(mask_bytes, format="PNG")
 
-            # 🎯 Camera Angle Variation (Perspective Warp)
+            # ---------------------------
+            # TRY FREE FIRST
+            # ---------------------------
+            result_image = call_huggingface(img_bytes.getvalue(), mask_bytes.getvalue())
+
+            if result_image:
+                st.success("✅ Processed using FREE Hugging Face API")
+            else:
+                st.warning("⚠️ Free API failed, switching to Replicate...")
+                result_image = call_replicate(img_bytes.getvalue(), mask_bytes.getvalue())
+
+            result_np = np.array(result_image)
+
+            # 🎯 Angle Variation
             pts1 = np.float32([[0,0],[w,0],[0,h],[w,h]])
-            shift = 20
+            shift = 15
             pts2 = np.float32([
-                [0+shift,0],
-                [w-shift,0+10],
+                [shift,0],
+                [w-shift,10],
                 [0,h-10],
                 [w,h]
             ])
@@ -102,7 +154,7 @@ if uploaded_file:
             with col1:
                 st.image(image, caption="Original", width="stretch")
             with col2:
-                st.image(warped, caption="AI Cleaned + Angle Variation", width="stretch")
+                st.image(warped, caption="Final Output", width="stretch")
 
             # Download
             buf = io.BytesIO()
