@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 from PIL import Image
 from ultralytics import YOLO
-import tempfile
+import io
 
 st.set_page_config(layout="wide")
 st.title("🧱 Wall Image Cleaner (MVP)")
@@ -22,9 +22,8 @@ if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     img_np = np.array(image)
 
-    st.subheader("Step 1: Draw Flex Area (Protected Region)")
+    st.subheader("Step 1: Select Flex Area (Protected Region)")
 
-    # Simple manual input (coordinates)
     h, w, _ = img_np.shape
 
     col1, col2 = st.columns(2)
@@ -37,10 +36,10 @@ if uploaded_file:
         x2 = st.number_input("x2", 0, w, w)
         y2 = st.number_input("y2", 0, h, h)
 
-    # Show selected area
+    # Draw selected area
     preview = img_np.copy()
-    cv2.rectangle(preview, (x1, y1), (x2, y2), (0,255,0), 2)
-    st.image(preview, caption="Selected Flex Area (Protected)", use_column_width=True)
+    cv2.rectangle(preview, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    st.image(preview, caption="Selected Flex Area (Protected)", width="stretch")
 
     if st.button("🚀 Process Image"):
 
@@ -50,18 +49,34 @@ if uploaded_file:
 
             mask = np.zeros(img_np.shape[:2], dtype=np.uint8)
 
+            st.subheader("🔍 Detected Objects")
+
             for r in results:
                 for box in r.boxes:
                     cls = int(box.cls[0])
                     label = model.names[cls]
 
-                    # Only remove these
-                    if label in ["person", "car", "motorbike", "truck", "bus"]:
+                    # Show detected labels
+                    st.write(f"Detected: {label}")
+
+                    # Objects to remove
+                    if label in ["person", "car", "motorcycle", "truck", "bus"]:
                         x_min, y_min, x_max, y_max = map(int, box.xyxy[0])
 
-                        # Skip if inside flex area
+                        # Add padding for better removal
+                        pad = 10
+                        x_min = max(0, x_min - pad)
+                        y_min = max(0, y_min - pad)
+                        x_max = min(w, x_max + pad)
+                        y_max = min(h, y_max + pad)
+
+                        # Skip if fully inside flex area
                         if not (x_min > x1 and y_min > y1 and x_max < x2 and y_max < y2):
                             mask[y_min:y_max, x_min:x_max] = 255
+
+            # Show mask (debug)
+            st.subheader("🧪 Removal Mask")
+            st.image(mask, caption="White = Removed Areas", width="stretch")
 
             # Inpaint
             inpainted = cv2.inpaint(img_np, mask, 3, cv2.INPAINT_TELEA)
@@ -70,18 +85,18 @@ if uploaded_file:
 
             col1, col2 = st.columns(2)
             with col1:
-                st.image(img_np, caption="Original", use_column_width=True)
+                st.image(img_np, caption="Original", width="stretch")
             with col2:
-                st.image(inpainted, caption="Cleaned", use_column_width=True)
+                st.image(inpainted, caption="Cleaned", width="stretch")
 
-            # Download
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-            cv2.imwrite(temp_file.name, cv2.cvtColor(inpainted, cv2.COLOR_RGB2BGR))
+            # Download (stable)
+            img_pil = Image.fromarray(inpainted)
+            buf = io.BytesIO()
+            img_pil.save(buf, format="PNG")
 
-            with open(temp_file.name, "rb") as f:
-                st.download_button(
-                    label="⬇️ Download Image",
-                    data=f,
-                    file_name="cleaned_image.png",
-                    mime="image/png"
-                )
+            st.download_button(
+                label="⬇️ Download Image",
+                data=buf.getvalue(),
+                file_name="cleaned_image.png",
+                mime="image/png"
+            )
