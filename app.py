@@ -11,7 +11,7 @@ st.title("🧱 Wall Image Cleaner (Stable MVP - No CV2)")
 # ---------------------------
 # Hugging Face Config
 # ---------------------------
-HF_API_URL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-inpainting"
+HF_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-inpainting"
 HF_HEADERS = {"Authorization": f"Bearer {st.secrets['HF_TOKEN']}"}
 
 # ---------------------------
