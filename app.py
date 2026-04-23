@@ -20,7 +20,6 @@ HF_HEADERS = {"Authorization": f"Bearer {st.secrets['HF_TOKEN']}"}
 time.sleep(2)
 def call_huggingface(image, mask):
 
-    # 🔥 Resize (CRITICAL for HF stability)
     image = image.resize((768, 512))
     mask = mask.resize((768, 512))
 
@@ -30,24 +29,25 @@ def call_huggingface(image, mask):
     mask_bytes = io.BytesIO()
     mask.save(mask_bytes, format="PNG")
 
-    for attempt in range(5):  # more retries
+    payload = {
+        "inputs": {
+            "image": img_bytes.getvalue(),
+            "mask": mask_bytes.getvalue(),
+            "prompt": "clean empty wall, realistic concrete texture, natural lighting, no people, no vehicles, seamless background"
+        }
+    }
+
+    for attempt in range(5):
         try:
             response = requests.post(
                 HF_API_URL,
                 headers=HF_HEADERS,
-                files={
-                    "image": ("image.png", img_bytes.getvalue(), "image/png"),
-                    "mask": ("mask.png", mask_bytes.getvalue(), "image/png"),
-                },
-                data={
-                    "prompt": "clean empty wall, realistic urban background, no vehicles, no people, natural texture, no blur"
-                },
+                json=payload,
                 timeout=120
             )
 
-            # Model loading
             if response.status_code == 503:
-                st.warning(f"⏳ Model loading... retry {attempt+1}")
+                st.warning("⏳ Model loading...")
                 time.sleep(6)
                 continue
 
@@ -58,7 +58,7 @@ def call_huggingface(image, mask):
                 st.error(f"HF Error: {response.status_code}")
                 return None
 
-        except Exception as e:
+        except:
             time.sleep(4)
 
     return None
