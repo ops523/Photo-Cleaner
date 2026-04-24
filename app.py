@@ -3,17 +3,18 @@ import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
 import io
 import random
+import zipfile
 
 st.set_page_config(layout="wide")
-st.title("🧱 Wall Image Variations Generator (No AI)")
+st.title("🧱 Wall Image Variations Generator (No AI - Clean Output)")
 
 # ---------------------------
-# Image Transform Functions
+# Transform Functions
 # ---------------------------
 
 def random_crop(img):
     w, h = img.size
-    crop_percent = random.uniform(0.85, 0.95)
+    crop_percent = random.uniform(0.90, 0.97)
 
     new_w = int(w * crop_percent)
     new_h = int(h * crop_percent)
@@ -24,44 +25,51 @@ def random_crop(img):
     return img.crop((left, top, left + new_w, top + new_h)).resize((w, h))
 
 
+def perspective_shift(img):
+    # ✅ SAFE camera shift (no black edges)
+    w, h = img.size
+
+    zoom_factor = random.uniform(1.05, 1.15)
+    new_w = int(w * zoom_factor)
+    new_h = int(h * zoom_factor)
+
+    img_zoomed = img.resize((new_w, new_h))
+
+    left = random.randint(0, new_w - w)
+    top = random.randint(0, new_h - h)
+
+    return img_zoomed.crop((left, top, left + w, top + h))
+
+
+def slight_rotate(img):
+    # ✅ very small rotation for realism
+    angle = random.uniform(-2, 2)
+    return img.rotate(angle, resample=Image.BICUBIC, expand=False)
+
+
 def color_adjust(img):
-    brightness = ImageEnhance.Brightness(img).enhance(random.uniform(0.9, 1.1))
-    contrast = ImageEnhance.Contrast(brightness).enhance(random.uniform(0.9, 1.1))
-    color = ImageEnhance.Color(contrast).enhance(random.uniform(0.9, 1.1))
+    brightness = ImageEnhance.Brightness(img).enhance(random.uniform(0.92, 1.08))
+    contrast = ImageEnhance.Contrast(brightness).enhance(random.uniform(0.92, 1.08))
+    color = ImageEnhance.Color(contrast).enhance(random.uniform(0.95, 1.05))
     return color
 
 
 def add_noise(img):
     np_img = np.array(img).astype(np.int16)
-
-    noise = np.random.normal(0, 5, np_img.shape)
+    noise = np.random.normal(0, 4, np_img.shape)
     noisy = np_img + noise
-
     noisy = np.clip(noisy, 0, 255).astype(np.uint8)
     return Image.fromarray(noisy)
 
 
 def slight_blur(img):
-    if random.random() > 0.5:
-        return img.filter(ImageFilter.GaussianBlur(radius=random.uniform(0.3, 1.0)))
+    if random.random() > 0.6:
+        return img.filter(ImageFilter.GaussianBlur(radius=random.uniform(0.3, 0.8)))
     return img
 
 
-def perspective_shift(img):
-    w, h = img.size
-
-    shift = random.randint(5, 20)
-
-    coeffs = (
-        1, shift / w, 0,
-        shift / h, 1, 0
-    )
-
-    return img.transform((w, h), Image.AFFINE, coeffs)
-
-
 # ---------------------------
-# Main Processing Pipeline
+# Pipeline
 # ---------------------------
 
 def generate_variation(image):
@@ -69,6 +77,7 @@ def generate_variation(image):
 
     img = random_crop(img)
     img = perspective_shift(img)
+    img = slight_rotate(img)
     img = color_adjust(img)
     img = add_noise(img)
     img = slight_blur(img)
@@ -77,8 +86,9 @@ def generate_variation(image):
 
 
 # ---------------------------
-# Upload
+# UI
 # ---------------------------
+
 uploaded_file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
 
 if uploaded_file:
@@ -94,7 +104,6 @@ if uploaded_file:
         st.subheader("Generated Outputs")
 
         cols = st.columns(num_variations)
-
         outputs = []
 
         for i in range(num_variations):
@@ -107,8 +116,6 @@ if uploaded_file:
         # ---------------------------
         # Download ZIP
         # ---------------------------
-        import zipfile
-
         zip_buffer = io.BytesIO()
 
         with zipfile.ZipFile(zip_buffer, "w") as zip_file:
